@@ -14,6 +14,7 @@ find_package(nlohmann_json REQUIRED)
 
 add_subdirectory(image_generator)
 
+add_subdirectory(feature_extractor)
 # add_subdirectory(common)
-# add_subdirectory(feature_extractor)
+
 # add_subdirectory(data_logger)
