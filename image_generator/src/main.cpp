@@ -1,3 +1,7 @@
+// image_generator/main.cpp
+// App 1: Reads images from a folder, encodes them as PNG, and streams
+// (metadata JSON + binary image) over ZeroMQ PUSH on tcp://*:5555.
+
 #include <iostream>
 #include <opencv2/imgcodecs.hpp> 
 #include <opencv2/core.hpp>

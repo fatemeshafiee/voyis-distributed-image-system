@@ -1,3 +1,5 @@
+// feature_extractor: receives images from tcp://localhost:5555 (PULL),
+// runs SIFT, adds keypoint metadata, and forwards to tcp://*:5556.
 #include <iostream>
 #include <zmq.h>
 #include <vector>

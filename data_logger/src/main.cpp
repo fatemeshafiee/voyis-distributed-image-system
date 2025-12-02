@@ -1,3 +1,6 @@
+// data_logger: receives feature metadata + image bytes from tcp://localhost:5556
+// and stores them in a SQLite database (voyis_frames.db).
+
 #include <iostream>
 #include <vector>
 #include <string>
