@@ -1,4 +1,4 @@
-// data_logger: receives feature metadata + image bytes from tcp://localhost:5556
+// data_logger: receives feature metadata + image bytes from ipc:///tmp/voyis-feature-stream.ipc
 // and stores them in a SQLite database (voyis_frames.db).
 
 #include <iostream>
@@ -10,23 +10,21 @@
 #include <sqlite3.h>
 #include <nlohmann/json.hpp>
 #include "common/frame.hpp"
+#include "common/sqlite_utils.hpp"
 #include "common/zmq_utils.hpp"
 
-
-bool open_db(sqlite3** db){
-    int rc = sqlite3_open("voyis_frames.db", db);
-    if(rc != SQLITE_OK){
-        std::cerr << "[ERROR] Failed to open database: "
-        << sqlite3_errmsg(*db) << "\n";
-        sqlite3_close(*db);
-        *db = nullptr;
-        return false;
-    }
-    return true;
+namespace {
+constexpr char kFeatureStreamEndpoint[] = "ipc:///tmp/voyis-feature-stream.ipc";
 }
-bool create_table(sqlite3* db){
 
-    const char* sql = "CREATE TABLE IF NOT EXISTS frames ("
+
+int main(){
+    auto db_opt = sqlite_utils::open("voyis_frames.db");
+    if(!db_opt)
+        return 1;
+    sqlite_utils::DbPtr db = std::move(*db_opt);
+
+    const char* create_frames_sql = "CREATE TABLE IF NOT EXISTS frames ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
         "  seq_number INTEGER,"
         "  image_name TEXT,"
@@ -37,65 +35,31 @@ bool create_table(sqlite3* db){
         "  image_bytes BLOB"
         ");";
 
-        char *errmsg = nullptr;
-        int rc = sqlite3_exec(db, sql, nullptr, nullptr, &errmsg);
-        if (rc != SQLITE_OK){
-            std::cerr << "[ERROR] failed to create table " 
-            << (errmsg ? errmsg : "unknown") << "\n";
+    if(!sqlite_utils::exec(db.get(), create_frames_sql, "create frames table")){
+        return 1;
+    }
 
-            sqlite3_free(errmsg);
-            return false;
-        }
-
-
-    return true;
-}
-bool prepare_insert(sqlite3* db, sqlite3_stmt** stmt){
-
-    const char* sql = 
+    const char* insert_sql = 
         "INSERT INTO frames ("
         "  seq_number, image_name, rows, cols, keypoint_count, meta_json, image_bytes"
         ") VALUES (?, ?, ?, ?, ?, ?, ?);";
 
-    int rc = sqlite3_prepare_v2(db, sql, -1, stmt, nullptr);
-    if(rc!= SQLITE_OK){
-        std::cerr << "[ERROR] Failed to prepare insert statement: "
-                  << sqlite3_errmsg(db) << "\n";  
-        return false;
-    }
-    return true;
-
-}
-
-
-int main(){
-    sqlite3* db = nullptr;
-    if(!open_db(&db))
-        return 1;
-
-    if(!create_table(db)){
-        sqlite3_close(db);
+    auto insert_stmt_opt = sqlite_utils::prepare(db.get(), insert_sql, "prepare insert");
+    if(!insert_stmt_opt){
         return 1;
     }
-    sqlite3_stmt * insert_stmt = nullptr;
-    if(!prepare_insert(db, &insert_stmt)){
-        sqlite3_close(db);
-        return 1;
-
-    }
+    sqlite_utils::StatementPtr insert_stmt = std::move(*insert_stmt_opt);
 
     void* context = zmq_ctx_new();
     void* pull_socket = zmq_socket(context, ZMQ_PULL);
-    int rc_pull = zmq_connect(pull_socket, "tcp://localhost:5556");
+    int rc_pull = zmq_connect(pull_socket, kFeatureStreamEndpoint);
     if(rc_pull != 0){
         std::cerr << "Failed to connect to the ZMQ PULL socket: " << zmq_strerror(errno) << "\n";
         zmq_close(pull_socket);
         zmq_ctx_term(context);
-        sqlite3_finalize(insert_stmt);
-        sqlite3_close(db);
         return 0; 
     }
-    std::cout << "Connected the ZMQ PULL socket. " << "\n";
+    std::cout << "Connected the ZMQ PULL socket to " << kFeatureStreamEndpoint << "\n";
 
     while(true){
         auto metadata_str_opt = zmq_utils::recv_string(
@@ -131,23 +95,19 @@ int main(){
         int cols = meta.cols;
         int kp_count = meta.keypoint_count;
 
-        sqlite3_reset(insert_stmt);
-        sqlite3_clear_bindings(insert_stmt);
+        sqlite_utils::reset(insert_stmt.get());
         int idx = 1;
 
-        sqlite3_bind_int(insert_stmt, idx++, seq_number);
-        sqlite3_bind_text(insert_stmt, idx++,  name.c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_int(insert_stmt,   idx++, rows);
-        sqlite3_bind_int(insert_stmt,   idx++, cols);
-        sqlite3_bind_int(insert_stmt,   idx++, kp_count);
-        sqlite3_bind_text(insert_stmt,  idx++, metadata_str_opt->c_str(), -1, SQLITE_TRANSIENT);
-        sqlite3_bind_blob(insert_stmt,  idx++, buf.data(),
+        sqlite3_bind_int(insert_stmt.get(), idx++, seq_number);
+        sqlite3_bind_text(insert_stmt.get(), idx++,  name.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int(insert_stmt.get(),   idx++, rows);
+        sqlite3_bind_int(insert_stmt.get(),   idx++, cols);
+        sqlite3_bind_int(insert_stmt.get(),   idx++, kp_count);
+        sqlite3_bind_text(insert_stmt.get(),  idx++, metadata_str_opt->c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_blob(insert_stmt.get(),  idx++, buf.data(),
                           static_cast<int>(buf.size()), SQLITE_TRANSIENT);
 
-        int step_rc = sqlite3_step(insert_stmt);
-        if (step_rc != SQLITE_DONE) {
-            std::cerr << "[ERROR] sqlite3_step failed: "
-                      << sqlite3_errmsg(db) << "\n";
+        if (!sqlite_utils::step(insert_stmt.get(), "sqlite3_step(insert frame)")) {
             continue;
         }
 
@@ -159,8 +119,6 @@ int main(){
 
     zmq_close(pull_socket);
     zmq_ctx_term(context);
-    sqlite3_finalize(insert_stmt);
-    sqlite3_close(db); 
 
     return 0;
 }

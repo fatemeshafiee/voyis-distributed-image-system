@@ -1,14 +1,22 @@
-// feature_extractor: receives images from tcp://localhost:5555 (PULL),
-// runs SIFT, adds keypoint metadata, and forwards to tcp://*:5556.
+// feature_extractor: receives images from ipc:///tmp/voyis-image-stream.ipc (PULL),
+// runs SIFT, adds keypoint metadata, and forwards to ipc:///tmp/voyis-feature-stream.ipc.
 #include <iostream>
 #include <zmq.h>
 #include <vector>
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
+#include <filesystem>
+#include <system_error>
 #include <cerrno>           
 #include "common/frame.hpp"
 #include "common/zmq_utils.hpp"
 
+
+namespace {
+constexpr char kImageStreamEndpoint[] = "ipc:///tmp/voyis-image-stream.ipc";
+constexpr char kFeatureStreamEndpoint[] = "ipc:///tmp/voyis-feature-stream.ipc";
+constexpr char kFeatureStreamPath[] = "/tmp/voyis-feature-stream.ipc";
+}
 
 int main(){
 
@@ -16,21 +24,23 @@ int main(){
     void* pull_socket = zmq_socket(context, ZMQ_PULL);
     void* push_socket = zmq_socket(context, ZMQ_PUSH);
 
-    int rc_pull = zmq_connect(pull_socket, "tcp://localhost:5555");
-    int rc_push = zmq_bind(push_socket, "tcp://*:5556");
+    int rc_pull = zmq_connect(pull_socket, kImageStreamEndpoint);
+    std::error_code remove_ec;
+    std::filesystem::remove(kFeatureStreamPath, remove_ec);
+    int rc_push = zmq_bind(push_socket, kFeatureStreamEndpoint);
 
     if(rc_pull != 0){
         std::cerr << "Faild to connect to the ZMQ PULL socket: " << zmq_strerror(errno) << "\n";
         return 0; 
     }
 
-    std::cout << "Connected the ZMQ PULL socket. " << "\n";
+    std::cout << "Connected the ZMQ PULL socket to " << kImageStreamEndpoint << "\n";
 
     if(rc_push != 0){
       std::cerr << "Faild to connect to the ZMQ PUSH socket:" << zmq_strerror(errno) <<"\n";
       return 0;
     }
-    std::cout << "ZMQ push socket bound on tcp://*:5556" << "\n";
+    std::cout << "ZMQ push socket bound on " << kFeatureStreamEndpoint << "\n";
 
     auto sift = cv::SIFT::create();
     while(true){

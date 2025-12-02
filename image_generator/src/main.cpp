@@ -1,6 +1,6 @@
 // image_generator/main.cpp
 // App 1: Reads images from a folder, encodes them as PNG, and streams
-// (metadata JSON + binary image) over ZeroMQ PUSH on tcp://*:5555.
+// (metadata JSON + binary image) over ZeroMQ PUSH on ipc:///tmp/voyis-image-stream.ipc.
 
 #include <iostream>
 #include <opencv2/imgcodecs.hpp> 
@@ -9,6 +9,7 @@
 #include <zmq.h>
 #include <nlohmann/json.hpp>
 #include <filesystem>
+#include <system_error>
 #include <vector>
 #include <algorithm>
 #include <thread> 
@@ -24,6 +25,11 @@ bool running = true;
 //     running = false;
 // }
 namespace fs = std::filesystem;
+
+namespace {
+constexpr char kImageStreamEndpoint[] = "ipc:///tmp/voyis-image-stream.ipc";
+constexpr char kImageStreamPath[] = "/tmp/voyis-image-stream.ipc";
+}
 int main(int argc, char** argv){
   // std::signal(SIGINT, signal_handler);
 
@@ -57,12 +63,14 @@ int main(int argc, char** argv){
 
   void* context = zmq_ctx_new();
   void* socket = zmq_socket(context, ZMQ_PUSH);
-  int rc = zmq_bind(socket, "tcp://*:5555");
+  std::error_code remove_ec;
+  fs::remove(kImageStreamPath, remove_ec);
+  int rc = zmq_bind(socket, kImageStreamEndpoint);
   if(rc!=0){
     std::cerr<< "failed to bind ZMQ socket: " << zmq_strerror(errno) <<"\n";
     return 1;
   }
-  std::cout<<"ZMQ push socket bound on tcp://*:5555 "<<"\n"; 
+  std::cout<<"ZMQ push socket bound on " << kImageStreamEndpoint <<"\n"; 
   std::size_t seq_number = 0;
   while(true){
     

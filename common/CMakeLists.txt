@@ -1,7 +1,7 @@
 add_library(voyis_common
     src/frame.cpp
     src/zmq_utils.cpp
-
+    src/sqlite_utils.cpp
 )
 # #     src/zmq_utils.cpp
 # src/image_utils.cpp
