@@ -31,7 +31,7 @@ The build produces the following binaries inside `build/`:
 - `data_logger/data_logger`
 
 ## Build with Docker
-The provided `Dockerfile` installs all dependencies on Ubuntu 22.04. Build an image and run the three apps inside separate containers or with `docker exec` shells:
+The provided `Dockerfile` installs all dependencies on Ubuntu 22.04. Build an image to run the three apps inside the same containers or with `docker exec` shells:
 
 ```bash
 docker build -t voyis-demo .
