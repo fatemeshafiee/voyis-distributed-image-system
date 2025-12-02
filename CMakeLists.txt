@@ -15,5 +15,28 @@ find_package(nlohmann_json REQUIRED)
 add_subdirectory(image_generator)
 add_subdirectory(data_logger)
 add_subdirectory(feature_extractor)
-# add_subdirectory(common)
+add_subdirectory(common)
 
+target_link_libraries(image_generator
+    PRIVATE
+        voyis_common
+        ${OpenCV_LIBRARIES}
+        ${ZMQ_LIBRARIES}
+        nlohmann_json::nlohmann_json
+)
+
+target_link_libraries(feature_extractor
+    PRIVATE
+        voyis_common
+        ${OpenCV_LIBRARIES}
+        ${ZMQ_LIBRARIES}
+        nlohmann_json::nlohmann_json
+)
+
+target_link_libraries(data_logger
+    PRIVATE
+        voyis_common
+        ${ZMQ_LIBRARIES}
+        SQLite::SQLite3
+        nlohmann_json::nlohmann_json
+)

@@ -15,6 +15,8 @@
 #include <chrono>
 #include <csignal>
 #include <cerrno>
+#include "common/frame.hpp"
+#include "common/zmq_utils.hpp"
 
 bool running = true;
 
@@ -79,43 +81,46 @@ int main(int argc, char** argv){
       else
         std::cout << "the buffer size is "<< buf.size() <<"\n";
       
-      nlohmann::json metadata;
-      metadata["seq_number"] = seq_number;
-      metadata["image_name"] = image_path.filename().string();
-      metadata["rows"] = img.rows;
-      metadata["cols"] = img.cols;
-      metadata["encoding"]   = "png";           
-      metadata["data_bytes"] = buf.size();   
+      FrameMetadata meta;
+      meta.seq_number  = seq_number;
+      meta.image_name = image_path.filename().string();
+      meta.rows  = img.rows;
+      meta.cols = img.cols;
+      meta.encoding   = "png";           
+      meta.keypoint_count = buf.size();   
 
-      std:: string metadata_str = metadata.dump();
+      std::string metadata_str = meta.to_json().dump();
       std::cout<< "trying to send data" <<"\n";
-      int rc_meta = zmq_send(socket, metadata_str.data(), metadata_str.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
-      if(rc_meta == -1){
-        if(errno == EAGAIN){
-          std::cerr << "[WARN] No downstream receiver (meta), dropping frame "
-                    << seq_number << "\n";
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-        }
-        else{
-          std::cerr << "[ERROR] zmq_send(meta) failed: "
-                    << zmq_strerror(errno) << "\n";
-        }
+      auto meta_rc = zmq_utils::send_string(
+          socket,
+          metadata_str,
+          ZMQ_SNDMORE | ZMQ_DONTWAIT,
+          "zmq_send(meta)"
+      );
+      if(meta_rc == zmq_utils::SendResult::WouldBlock){
+        std::cerr << "[WARN] No downstream receiver (meta), dropping frame "
+                  << seq_number << "\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
-      int rc_img = zmq_send(socket, buf.data(), buf.size(), ZMQ_DONTWAIT);
-      if (rc_img == -1){
-        if(errno == EAGAIN){
-          std::cerr << "[WARN] No downstream receiver (image), dropping frame "
-                    << seq_number << "\n";
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          continue;
-        }
-        else{
-          std::cerr << "[ERROR] zmq_send(image) failed: "
-                    << zmq_strerror(errno) << "\n";
-          continue;
-        }
+      if(meta_rc == zmq_utils::SendResult::Error){
+        continue;
+      }
+
+      auto img_rc = zmq_utils::send_bytes(
+          socket,
+          buf,
+          ZMQ_DONTWAIT,
+          "zmq_send(image)"
+      );
+      if (img_rc == zmq_utils::SendResult::WouldBlock){
+        std::cerr << "[WARN] No downstream receiver (image), dropping frame "
+                  << seq_number << "\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+      if (img_rc == zmq_utils::SendResult::Error){
+        continue;
       }
       std::cout << "Sent frame seq=" << seq_number 
           << " bytes=" << buf.size() << "\n";

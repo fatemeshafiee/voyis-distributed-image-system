@@ -10,7 +10,7 @@ target_link_libraries(feature_extractor
 
 target_include_directories(feature_extractor
     PRIVATE
-        ${OpenCV_LIBRARIES}
-        ${ZMQ_LIBRARIES}
+        ${${OpenCV_INCLUDE_DIRS}}
+        ${ZMQ_INCLUDE_DIRS}
         nlohmann_json::nlohmann_json
 )

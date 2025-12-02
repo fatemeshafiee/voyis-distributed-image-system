@@ -6,7 +6,8 @@
 #include <nlohmann/json.hpp>
 #include <opencv2/opencv.hpp>
 #include <cerrno>           
-
+#include "common/frame.hpp"
+#include "common/zmq_utils.hpp"
 
 
 int main(){
@@ -33,44 +34,34 @@ int main(){
 
     auto sift = cv::SIFT::create();
     while(true){
-        zmq_msg_t metadata_msg;
-        zmq_msg_init (&metadata_msg);
-        int rc_meta = zmq_msg_recv(&metadata_msg, pull_socket, 0);
-        if(rc_meta == -1){
-            std::cerr << "[ERROR] zmq_msg_recv(meta) failed: "
-                  << zmq_strerror(errno) << "\n";
-            zmq_msg_close(&metadata_msg);
+        auto metadata_str_opt = zmq_utils::recv_string(
+            pull_socket,
+            0,
+            "zmq_msg_recv(meta)"
+        );
+        if (!metadata_str_opt) {
             continue;
         }
-        std::string metadata_str(
-            static_cast<char*> (zmq_msg_data(&metadata_msg)), 
-            zmq_msg_size(&metadata_msg));
-        zmq_msg_close(&metadata_msg);
-        nlohmann::json metadata;
-        try{
-            metadata = nlohmann::json::parse(metadata_str);
-        } catch (const std::exception& e){
-            std::cerr<< "[ERROR] Failed to parse metadata JSON: " << e.what() << "\n";
+        auto meta_opt = FrameMetadata::from_json(*metadata_str_opt);
+        if (!meta_opt) {
+            std::cerr << "[ERROR] Failed to parse metadata JSON\n";
             continue;
         }
-        std::cout << "Received meta: " << metadata.dump() << "\n";
+        FrameMetadata meta = *meta_opt;
+        std::cout << "Received meta: " << meta.to_json().dump() << "\n";
+
         
 
-        zmq_msg_t img_msg;
-        zmq_msg_init(&img_msg);
-        int rc_img = zmq_msg_recv(&img_msg, pull_socket, 0);
-        if (rc_img == -1){
-            std::cerr << "[ERROR] zmq_msg_recv(image) failed: " << zmq_strerror(errno) << "\n";
-            zmq_msg_close(&img_msg);
+        auto buf_opt = zmq_utils::recv_bytes(
+            pull_socket,
+            0,
+            "zmq_msg_recv(image)"
+        );
+        if (!buf_opt) {
             continue;
         }
-
-        std::vector<uchar> buf (
-            static_cast<uchar*>(zmq_msg_data(&img_msg)),
-            static_cast<uchar*>(zmq_msg_data(&img_msg)) + zmq_msg_size(&img_msg)
-        );
+        std::vector<unsigned char> buf = std::move(*buf_opt);
         std::cout<< buf.size()<<"\n";
-        zmq_msg_close(&img_msg);
         std::cout << "Received image buffer size: " << buf.size() << "\n";
 
         cv::Mat img = cv::imdecode(buf, cv::IMREAD_COLOR);
@@ -86,11 +77,13 @@ int main(){
 
         std::cout << "Extracted " << keypoints.size()
                     << " keypoints for seq="
-                    << metadata.value("seq_number", -1)
+                    << meta.seq_number
                     << "\n";
 
-        nlohmann::json feature_data = metadata;
-        feature_data["keypoint_count"] = keypoints.size();
+        FrameMetadata out_meta = meta;
+        out_meta.keypoint_count = static_cast<int>(keypoints.size());
+
+        nlohmann::json feature_data = out_meta.to_json();
 
         nlohmann::json kp_array = nlohmann::json::array();
         for(const auto& kp: keypoints){
@@ -106,47 +99,40 @@ int main(){
         feature_data["keypoints"] = kp_array;
 
         std::string feature_str = feature_data.dump();
-        int rc_feature = zmq_send(
-            push_socket, 
-            feature_str.data(),
-            feature_str.size(), 
-            ZMQ_SNDMORE | ZMQ_DONTWAIT 
+        auto feature_rc = zmq_utils::send_string(
+            push_socket,
+            feature_str,
+            ZMQ_SNDMORE | ZMQ_DONTWAIT,
+            "zmq_send(feature to data_logger)"
         );
 
-        if(rc_feature == -1){
-            if(errno == EAGAIN){
-                std::cerr << "[WARN] No downstream logger (feature), dropping frame " 
-                << feature_data.value("seq_number", -1) << "\n";
-            }
-            else{
-                std::cerr << "[ERROR] zmq_send(feature to data_logger) failed: " 
-                << zmq_strerror(errno) << "\n";
-            }
+        if(feature_rc == zmq_utils::SendResult::WouldBlock){
+            std::cerr << "[WARN] No downstream logger (feature), dropping frame " 
+            << out_meta.seq_number  << "\n";
+            continue;
+        }
+        if(feature_rc == zmq_utils::SendResult::Error){
             continue;
         }
 
-        int rc_img_push = zmq_send(
-            push_socket, 
-            buf.data(), 
-            buf.size(), 
-            ZMQ_DONTWAIT
+        auto img_rc = zmq_utils::send_bytes(
+            push_socket,
+            buf,
+            ZMQ_DONTWAIT,
+            "zmq_send(image to data_logger)"
         );
 
-        if(rc_img_push == -1){
-            if (errno == EAGAIN){
-                std::cerr << "[WARN] No downstream logger (image), dropping frame  " 
-                << feature_data.value("seq_number", -1) << "\n";
-            }
-            else{
-                std::cerr << "[ERROR] zmq_send(image to data_logger) failed: "
-                << zmq_strerror(errno) << "\n";
-
-            }
+        if(img_rc == zmq_utils::SendResult::WouldBlock){
+            std::cerr << "[WARN] No downstream logger (image), dropping frame  " 
+            << out_meta.seq_number << "\n";
+            continue;
+        }
+        if(img_rc == zmq_utils::SendResult::Error){
             continue;
         }
 
         std::cout << "Forwarded seq="
-        << feature_data.value("seq_number", -1) 
+        << out_meta.seq_number
         << "with " << keypoints.size()
         << "keypoints to data logger app\n";
     }
